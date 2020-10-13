@@ -3,7 +3,11 @@
 ### SSL握手流程图 ###
 ![](SSL_handshake.png)
 
-
+### (1) client hello  
+- 版本信息。支持的SSL/TLS协议版本
+- 加密套件候选列表
+- 随机数
+- 扩展字段
 
 
 
