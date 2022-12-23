@@ -72,4 +72,39 @@ class Magic {
     - 表达式捕获(c++14新特性)
 ### 函数对象包装器
 - std::function
-- 
+- std::bind和std::placeholders
+    - 例子
+```cpp
+int foo(int a, int b, int c) {
+    ;
+}
+int main() {
+    // 将参数1， 2绑定到函数foo上
+    // 但使用std::placeholders::_1来对第一个参数进行占位
+    auto bindFoo = std::bind(foo, std::placeholders::_1, 1, 2);
+    bindFoo(1);
+}
+```
+### 右值引用
+- **左值** 赋值符号左边的值，表达式后依然存在的持久对象
+- **右值** 表达式结束后就不再存在的临时对象
+- **纯右值** 
+    - 纯粹的字面量，如10，true
+    - 求值结果相当于字面量或匿名临时变量，如 1+2
+    - 非引用返回的临时变量，运算表达式产生的临时变量，原始字面量，Lambda表达式
+    - 字符串字面量是一个左值，类型为const char数组
+- **将亡值** 即将被销毁，却能被移动的值
+```cpp
+std::vector<int> foo() {
+    std::vector<int> temp = {1, 2, 3, 4};
+    return temp;
+}
+std::vector<int> v = foo();
+```
+    最后一行中，v是左值，foo()返回的值就是右值，也是纯右值。但是v可以被别的变量捕获到，而foo()产生的返回值作为一个临时变量，一旦被v复制后，将立即被销毁，无法获取，也不能被修改。
+- **右值引用和左值引用**
+- **移动语义**
+    - 可以避免无意义的拷贝构造，加强了性能
+```cpp
+#include
+```
