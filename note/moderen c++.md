@@ -321,3 +321,158 @@ int main() {
 }
 ```
 - 在封装好要调用的目标后，可以使用get_future()来获得一个std::future对象，以便之后实施线程同步
+## 条件变量
+- std::condition_variable是为了解决死锁而生，当互斥操作不够用而引入的。notify_one()用于唤醒一个线程；notify_all()则是通知所有线程
+- 使用案例
+```cpp
+#include <queue>  
+#include <chrono>  
+#include <mutex>  
+#include <thread>  
+#include <iostream>  
+#include <condition_variable>  
+  
+int main() {  
+    std::queue<int> produced_nums;  
+    std::mutex mtx;  
+    std::condition_variable cv;  
+    bool notified = false; // 通知信号  
+  
+    // 生产者  
+    auto producer = [&]() {  
+        for( int i = 0; ; i++){  
+            std::this_thread::sleep_for(std::chrono::milliseconds(900));  
+            std::unique_lock<std::mutex> lock(mtx);  
+            std::cout << "producing " << i << std::endl;  
+            produced_nums.push(i);  
+            notified = true;  
+            cv.notify_all(); // 也可以使用notify_one  
+        }  
+    };  
+    // 消费者  
+    auto consumer = [&]() {  
+        while (true){  
+            std::unique_lock<std::mutex> lock(mtx);  
+            while(!notified){ // 避免虚假唤醒  
+                cv.wait(lock);  
+            }  
+            lock.unlock();  
+            // 消费者慢于生产者  
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));  
+            lock.lock();  
+            while(!produced_nums.empty()){  
+                std::cout << "consuming " << produced_nums.front() << std::endl;  
+                produced_nums.pop();  
+            }  
+            notified = false;  
+        }  
+    };  
+  
+    // 分别在不同的线程中运行  
+    std::thread p(producer);  
+    std::thread cs[2];  
+    for(int i = 0; i < 2; ++i){  
+        cs[i] = std::thread(consumer);  
+    }  
+    p.join();  
+    for(int i = 0; i < 2; ++i){  
+        cs[i].join();  
+    }  
+    return 0;  
+}
+```
+## 原子操作和内存模型
+### 原子操作
+- 并非所有的类型均提供原子操作，因为原子操作的可行性取决于具体的cpu架构，可以通过下列方式检查该原子类型是否需要支持原子操作
+- 检查demo
+```cpp
+#include <atomic>  
+#include <iostream>  
+  
+struct A{  
+    float x;  
+    int y;  
+    long long z;  
+};  
+  
+int main(){  
+    std::atomic<A> a;  
+    std::cout << std::boolalpha << a.is_lock_free() << std::endl;  
+    return 0;  
+}
+```
+### 一致性模型
+- **线性一致性** 又称强一致性或原子一致性。要求任何一次读操作都能躲到某个数据最近一次写的数据，并且所有线程的操作顺序与全局时钟下的顺序是一致的。
+- **顺序一致性** 同样要求任何一次读操作都能读到数据最近一次写入的数据，但是并未要求与全局时钟的顺序一致。
+- **因果一致性** 只需要有因果关系的操作顺序得到保障，非因果关系的操作顺序则不做要求。
+- **最终一致性** 最弱的一致性要求，只保障某个操作在未来的某个时间点上会被观察到，但并不要求被观察到的时间点。
+### 内存顺序
+为了追求极致的性能，实现各种强度要求的一致性，c++11为原子操作定义了六种不同的内存顺序std::memory_order的选项，表达了四种多线程间的同步模型
+- **宽松模型** 在此模型下，单个线程内的原子操作都是顺序执行的，不允许指令重排，但不同线程间原子操作的顺序是任意的。
+```cpp
+std::atomic<int> counter = { 0 };  
+std::vector<std::thread> vt;  
+for(int i = 0; i < 100; ++i){  
+    vt.emplace_back([&](){  
+       counter.fetch_add(1, std::memory_order_relaxed);  
+    });  
+}  
+for(auto &t : vt){  
+    t.join();  
+}  
+std::cout << "current counter:" << counter << std::endl;
+```
+- **释放/消费模型** 在此模型中，开始限制线程间的操作顺序，如果某个线程需要修改某个值，但另一个线程会对该值的某次操作产生依赖，即后者依赖前者。具体而言，线程A完成了三次对x的写操作，线程B仅依赖其中第三次x的写操作，与x的前两次写行为无关，则当A主动x.release()的时候（即使用std::memory_order_release），选项std::memory_order_consume能确保B在调用x.load时候，观察到A中第三次对x的写操作。
+```cpp
+// 初始化为nullptr防止comsumer线程从野指针进行读取  
+std::atomic<int *> ptr(nullptr);  
+int v;  
+std::thread producer([&](){  
+    int* p = new int(42);  
+    v = 1024;  
+    ptr.store(p, std::memory_order_release);  
+});  
+std::thread consumer([&](){  
+   int* p;  
+   while(!(p = ptr.load(std::memory_order_consume)));  
+   std::cout << "p: " << *p << std::endl;  
+   std::cout << "v: " << v << std::endl;  
+});  
+producer.join();  
+consumer.join();
+```
+- **释放/获取模型** std::memory_order_release 确保了它之前的写操作不会发生在释放操作之后，是一个向后的屏障，而std::memory_order_acquire确保了它之前的写行为不会发生在该获取操作之后，是一个向前的屏障。对于选项std::memory_order_acq_rel而言，则结合了这两者的特点，唯一确定了一个内存屏障，使得当前线程对内存的读写不会被重排并越过此操作前后
+```cpp
+std::vector<int> v;  
+std::atomic<int> flag = { 0 };  
+std::thread release([&]() {  
+   v.push_back(42);  
+   flag.store(1, std::memory_order_release);  
+});  
+std::thread acqrel([&](){  
+   int expected = 1; // must before compare_exchange_strong  
+   while(!flag.compare_exchange_strong(expected, 2, std::memory_order_acq_rel))  
+       expected = 1; // must after compare_exchange_strong  
+   // flag has changed to 2});  
+std::thread acquire([&](){  
+   while(flag.load(std::memory_order_acquire) < 2);  
+   std::cout << v.at(0) << std::endl; // must be 42  
+});  
+release.join();  
+acqrel.join();  
+acquire.join();
+```
+- **顺序一致模型** 在此模型下，原子操作满足顺序一致性，进而可能对性能产生损耗。
+```cpp
+std::atomic<int> counter = { 0 };  
+std::vector<std::thread> vt;  
+for(int i = 0; i < 100; ++i){  
+    vt.emplace_back([&](){  
+        counter.fetch_add(1, std::memory_order_seq_cst);  
+    });  
+}  
+for(auto& t : vt){  
+    t.join();  
+}  
+std::cout << "current counter:" << counter << std::endl;
+```
